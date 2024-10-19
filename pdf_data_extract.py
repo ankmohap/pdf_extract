@@ -67,19 +67,23 @@ def extract_demography_from_pdf(pdf_path):
     else:
         print('Name not found')
     
-    age_gender_match = re.search(age_gender_pattern, text)
-    if age_gender_match:
-        extracted_age = age_gender_match.group(1).strip()  # Extracting the age
-        extracted_gender = age_gender_match.group(2).strip()  # Extracting the gender
-    else:
-        print('Age/Gender not found')
+    unwanted_patterns = [
+        r"(?i)Billing Date\s*",
+        r"(?i)OP Reg No\s*"
+        ]
+    count = 0
+    # Remove all unwanted patterns by looping through the list
+    for pattern in unwanted_patterns:
+        if (count==0):
+            cleaned_text = re.sub(pattern, "", extracted_name, flags=re.DOTALL)
+        else:
+            cleaned_text = re.sub(pattern, "", cleaned_text, flags=re.DOTALL)
+        count+=1
     
     patient_details = {
         "Patient Details": [
             {
-                "Patient Name": extracted_name,
-                "Age": extracted_age,
-                "Gender": extracted_gender
+                "Patient Name": cleaned_text
             }
         ]
     }
