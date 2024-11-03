@@ -1,30 +1,15 @@
-import pandas as pd
+##Library imports
+import os
+import pytesseract
+from PIL import Image
+import cv2
+from matplotlib import pyplot as plt
 import re
-import fitz  # PyMuPDF
+from pdf2image import convert_from_path
+import pandas as pd
 import json
-from pdfminer.high_level import extract_text
-
-# Step 1: Read test names from CSV
-def read_test_names(csv_file):
-    df = pd.read_csv(csv_file)
-    return df['Test_Name'].tolist()  # Adjust the column name as necessary
-
-# Step 2: Extract text from PDF
-def extract_text_from_pdf(pdf_file):
-    text = ''
-    try:
-        pdf_document = fitz.open(pdf_file)
-        num_pages = pdf_document.page_count
-        for page_number in range(num_pages):
-            page = pdf_document.load_page(page_number)
-            # Extract text blocks and sort them
-            blocks = page.get_text("blocks")
-            blocks_sorted = sorted(blocks, key=lambda b: (b[1], b[0]))
-            for block in blocks_sorted:
-                text= text + block[4]
-    except Exception as e:
-        print(f"Error: {e}")
-    return text
+import glob
+import argparse
 
 # Step 3: Search for test names and extract results
 default_units = {
@@ -52,24 +37,36 @@ default_units = {
     # Add other relevant tests and their units
 }
 
-def extract_demography_from_pdf(pdf_path):
-    text = extract_text_from_pdf(pdf_path)
+## Convert PDF to images
+def conver_pdf_to_image(pdf_file):
+    images = convert_from_path(pdf_file, dpi=300)  # Higher DPI for better quality
+    for i, img in enumerate(images):
+        # Resize and crop image to resemble a phone screenshot
+        img_resized = img.resize((1080, 1920), Image.LANCZOS)
+        # Save as JPG
+        img_resized.save(f'img/page_{i+1}.jpg', 'JPEG', quality=90)
+
+
+def extract_demography_from_pdf(img):
+    text = pytesseract.image_to_string(img)
     #print(text)
     # Step 2: Define regex pattern for Name
     # This pattern accounts for optional titles (Mr., Ms., etc.) and handles tabs and spaces
-    name_pattern = r'(?i)Name\s*[:\t]*\s*(?:Mr\.|Ms\.|Mrs\.|Dr\.)?\s*([A-Za-z\s]+)(?=\n)'
-    age_gender_pattern = r'(?i)Age\s*/?\s*Gender\s*[:\t]*\s*(\d+)\s*(?:Yrs?|Y)\s*/\s*(Male|Female|Other)'
-    
+    name_pattern = r"(?i)NAME\.?\s*[:\t]*\s*(?:Mr\.|Ms\.|Mrs\.|Dr\.|COL\.)?\s*([A-Za-z\s]+)"
+    extracted_name = ''
     # Step 3: Extract the name
     match = re.search(name_pattern, text)
     if match:
         extracted_name = match.group(1)
     else:
         print('Name not found')
-    
+        
     unwanted_patterns = [
         r"(?i)Billing Date\s*",
-        r"(?i)OP Reg No\s*"
+        r"(?i)OP Reg No\s*",
+        r"(?i)Age\s*",
+        r"(?i)Lab No\s*",
+        r"(?i)UHID NOWVisit ID\s*"
         ]
     count = 0
     # Remove all unwanted patterns by looping through the list
@@ -89,6 +86,11 @@ def extract_demography_from_pdf(pdf_path):
     }
     
     return patient_details
+
+# Read test names from CSV
+def read_test_names(csv_file):
+    df = pd.read_csv(csv_file)
+    return df['Test_Name'].tolist()  # Adjust the column name as necessary
 
 def extract_test_results(text, test_names):
     results = []
@@ -126,39 +128,52 @@ def extract_test_results(text, test_names):
 
     return results
 
-import argparse
-import pandas as pd
-import re
-import fitz  # PyMuPDF
-import json
-from pdfminer.high_level import extract_text
-
 # Your existing functions...
 
 def main(csv_file, pdf_file):
-    # Step 1: Read test names from the CSV file
+    folder_path = 'img/'
+    bool_val = conver_pdf_to_image(pdf_file)
+    # List only .jpg files and extract page numbers
+    jpg_files = [f for f in os.listdir(folder_path) if f.endswith('.jpg') and os.path.isfile(os.path.join(folder_path, f))]
     test_names = read_test_names(csv_file)
-
-    # Step 2: Extract text from the PDF file
-    pdf_text = extract_text_from_pdf(pdf_file)
-
-    # Clean the extracted text by removing unwanted patterns
-    unwanted_pattern = r"(Sample\s*:\s*.*?\n)?(Method\s*:\s*.*?\n)?"
-    cleaned_text = re.sub(unwanted_pattern, "", pdf_text, flags=re.DOTALL)
-
-    # Step 3: Extract test results based on the test names
-    extracted_results = extract_test_results(cleaned_text, test_names)
-
-    # Step 4: Extract demographic information from the PDF file
-    patient_details = extract_demography_from_pdf(pdf_file)
-
-    # Combine patient details with extracted results
-    final_json = patient_details
-    final_json["Test Results"] = extracted_results
-
-    # Convert to JSON string for output
-    json_output = json.dumps(final_json, indent=4)
+    final_result = []
+    jpg_files_sorted = sorted(jpg_files, key=lambda x: int(re.search(r'(\d+)', x).group()))
+    data=[]
+    counter = 0 
+    for i in jpg_files_sorted:
+        img  = cv2.imread(f'img/{i}')
+        # Step 2: Extract text from PDF
+        text = pytesseract.image_to_string(img)
+        unwanted_patterns = [
+            r"(Sample\s*:\s*.*?\n)?(Method\s*:\s*.*?\n)?",
+            r"Ref\. Cust : PHLB_\d+ ?"
+            ]
+        count = 0
+        # Remove all unwanted patterns by looping through the list
+        for pattern in unwanted_patterns:
+            if (count==0):
+                cleaned_text = re.sub(pattern, "", text, flags=re.DOTALL)
+            else:
+                cleaned_text = re.sub(pattern, "", cleaned_text, flags=re.DOTALL)
+            count+=1
+        #extract name
+        if counter == 0 :
+            patient_details = extract_demography_from_pdf(img)
+            counter += 1
+        
+        # Step 3: Extract results based on test names
+        extracted_results = extract_test_results(cleaned_text, test_names)
+        # Process each item in extracted_results
+        output_json = json.dumps(extracted_results)
+        final_result += extracted_results
+    
+    # Output in JSON format
+    output_json = json.dumps(final_result, indent=4)
+    patient_json = patient_details
+    patient_json["Test Results"] = final_result
+    json_output = json.dumps(patient_json, indent=4)
     print(json_output)
+
 
 if __name__ == "__main__":
     # Set up argument parser
