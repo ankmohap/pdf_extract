@@ -174,6 +174,13 @@ def main(csv_file, pdf_file):
     json_output = json.dumps(patient_json, indent=4)
     print(json_output)
 
+    folder_path = 'img/'
+    files = glob.glob(f"{folder_path}/*")
+    for file in files:
+        if os.path.isfile(file):
+            os.remove(file)  # Delete each file
+    print("All files have been deleted.")
+
 
 if __name__ == "__main__":
     # Set up argument parser
